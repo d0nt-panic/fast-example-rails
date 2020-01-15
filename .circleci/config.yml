@@ -1,0 +1,56 @@
+version: 2.1
+orbs:
+  fast: wallarm/fast@dev:add_recorder_11
+jobs:
+  build:
+    machine:
+      image: ubuntu-1604:201903-01
+
+    steps:
+      - checkout
+
+      - run:
+          name: Build docker
+          command: |
+            docker build -t rails_example -f Dockerfile .
+
+      - run:
+          name: Create common network
+          command: |
+            docker network create --subnet=172.18.0.0/16 rails_network
+
+      - run:
+          name: Start Selenium
+          command: |
+            docker run --rm -d --name selenium \
+              --net rails_network --ip 172.18.0.67 \
+              -e http_proxy=http://172.18.0.65:8080 \
+              -p 4444:4444 \
+              selenium/standalone-firefox:latest
+
+      - fast/recorder_mode: # run fast a proxy
+          wallarm_api_host: api.wallarm.com
+          docker_network: rails_network
+          docker_ip: 172.18.0.65
+
+      - run:
+          name: Run specs
+          command: |
+            docker run --rm --name app-test \
+              --net rails_network --ip 172.18.0.66 \
+              -e CAPYBARA_SERVER_HOST=app-test \
+              -p 3000:3000 \
+              rails_example bundle exec rspec spec/features/posts_spec.rb
+
+      - run:
+          name: Run application
+          command: |
+            docker run --rm -d --name app-test \
+              --net rails_network --ip 172.18.0.66 \
+              -p 3000:3000 \
+              rails_example
+
+      - fast/run_security_tests:
+          wallarm_api_host: api.wallarm.com
+          app_port: "3000"
+          # test_record_id: "3334" # use your test_record_id
